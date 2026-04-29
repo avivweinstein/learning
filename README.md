@@ -5,3 +5,4 @@ Personal learning notes. A place where I work through topics I want to understan
 ## Topics
 
 - [Networking](networking.md) — networking concepts and Q&A.
+- [Git](git.md) — mental model, rebase vs merge, common operations, recovery.
