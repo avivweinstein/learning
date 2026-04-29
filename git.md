@@ -207,7 +207,7 @@ In practice, most teams settle on one of:
 
 1. **Rebase your feature branch onto main, then merge into main** (often as a fast-forward or squash) — gives a linear main.
 2. **Merge main into your feature branch periodically, then merge feature into main** — preserves all the bubbles.
-3. **Squash-merge** (see §7) — collapses the whole branch into one commit on main.
+3. **Squash-merge** (see §12) — collapses the whole branch into one commit on main.
 
 ### Interactive rebase: `git rebase -i`
 
@@ -335,9 +335,215 @@ Sometimes you've rebased and need to push over what's on the remote. **Never** u
 
 `--force-with-lease` says "force-push, but only if the remote is still where I last saw it." If a teammate pushed in the meantime, your push is rejected and you can investigate.
 
+### `git show <sha>`
+
+Inspect a single commit in detail — message, author, date, and the full diff.
+
+```
+git show HEAD                        # the most recent commit
+git show abc123                      # a specific commit
+git show abc123 -- path/to/file      # only that commit's changes to one file
+git show HEAD~3:path/to/file         # the contents of a file as of 3 commits ago
+```
+
+The last form is handy for grabbing an old version of a file without checking it out.
+
+### `git clean` — remove untracked files
+
+`git reset --hard` doesn't touch untracked files. To really sweep a working dir:
+
+- `git clean -n` — **dry run.** Always start here. Lists what would be deleted.
+- `git clean -f` — delete untracked files.
+- `git clean -fd` — also delete untracked *directories*.
+- `git clean -fdx` — also delete files ignored by `.gitignore` (e.g. `node_modules/`, `build/`). Nuclear option.
+
+There is **no undo** — these files aren't in Git at all. Always `-n` first.
+
+### Branch management
+
+Day-to-day branch operations beyond create/switch:
+
+```
+git branch                          # list local branches
+git branch -a                       # also list remote-tracking branches
+git branch -d <branch>              # delete a fully-merged branch (safe)
+git branch -D <branch>              # force-delete (use when you intentionally throw work away)
+git branch -m <old> <new>           # rename a branch
+git branch -m <new>                 # rename the current branch
+git push origin --delete <branch>   # delete a branch on the remote
+git fetch --prune                   # drop stale origin/<branch> refs whose remote branch was deleted
+```
+
+After a PR merges, the remote branch is often auto-deleted. `git fetch --prune` cleans up your local tracking refs so `git branch -a` stops listing zombies. Set `git config --global fetch.prune true` to make this automatic.
+
 ---
 
-## 7. Workflows you'll meet in the wild
+## 7. `.gitignore`
+
+A plain-text file listing patterns Git should not track. Put one at the repo root (and optionally more in subdirectories).
+
+### Pattern syntax
+
+```
+# Comments start with #
+*.log              # any .log file, anywhere in the repo
+build/             # any directory named build (trailing slash → dirs only)
+/dist              # only at repo root (leading slash → no recursion)
+**/temp            # a temp dir at any depth
+*.tmp              # all .tmp files
+!important.tmp     # ...except this one (negation)
+```
+
+Globs: `*` matches within a single path component, `**` matches across components, `?` matches one character, `[abc]` matches a character class.
+
+### Where to put ignore rules
+
+- **`.gitignore` at the repo root** — committed, shared with the team. Default home for project-specific patterns (build outputs, deps, generated files).
+- **`.gitignore` in subdirectories** — committed, scoped to that subtree. Useful in monorepos.
+- **`~/.gitignore` (global)** — uncommitted, applies to all your repos. Good for editor/OS junk you shouldn't push onto teammates (`.DS_Store`, `.idea/`, `*.swp`). Enable with `git config --global core.excludesfile ~/.gitignore`.
+- **`.git/info/exclude`** — uncommitted, scoped to one repo. For personal patterns you don't want global but also don't want committed.
+
+### `.gitignore` doesn't untrack already-tracked files
+
+Adding a pattern only affects untracked files. If you committed `secret.env` and *then* added it to `.gitignore`, Git keeps tracking it. To stop:
+
+```
+git rm --cached secret.env          # remove from index, keep the local file
+git commit -m "Untrack secret.env"
+```
+
+Now future changes are ignored. **Rotate the secret regardless** — it's still in git history.
+
+---
+
+## 8. Configuration and aliases
+
+`git config` reads/writes config in three scopes:
+
+- **System** (`/etc/gitconfig`) — `--system`, rare.
+- **Global** (`~/.gitconfig`) — `--global`, your personal defaults across all repos.
+- **Local** (`.git/config`) — default scope; this repo only. Overrides global.
+
+`git config --list --show-origin` lists every active setting and where it came from. Invaluable when something behaves unexpectedly.
+
+### Settings worth setting once
+
+```
+git config --global user.name  "Aviv Weinstein"
+git config --global user.email "aviv@example.com"
+
+git config --global init.defaultBranch main          # new repos start on main, not master
+git config --global pull.rebase true                 # pull = fetch + rebase, not fetch + merge
+git config --global rebase.autoStash true            # auto-stash dirty tree before a rebase
+git config --global rerere.enabled true              # remember conflict resolutions; reapply automatically
+git config --global fetch.prune true                 # always prune stale tracking refs on fetch
+git config --global push.default current             # `git push` pushes the current branch by name
+git config --global core.editor "code --wait"        # or vim, nano, whatever
+git config --global diff.algorithm histogram         # smarter diffs for refactors
+git config --global merge.conflictStyle zdiff3       # show common ancestor in conflict markers
+```
+
+### Aliases
+
+Aliases live under `[alias]` in your gitconfig. The classics:
+
+```
+git config --global alias.st   "status -sb"
+git config --global alias.co   "checkout"
+git config --global alias.br   "branch"
+git config --global alias.lg   "log --oneline --graph --decorate --all"
+git config --global alias.last "log -1 --stat"
+git config --global alias.unstage "reset HEAD --"
+git config --global alias.amend "commit --amend --no-edit"
+```
+
+Prefix with `!` to alias to a shell command:
+
+```
+git config --global alias.cleanup "!git branch --merged main | grep -v '^[ *] main$' | xargs git branch -d"
+```
+
+---
+
+## 9. Hooks
+
+Hooks are scripts Git runs at specific points in the commit/push lifecycle. They live in `.git/hooks/` and are **not committed** — because they execute arbitrary code on clone, sharing them via git itself would be a supply-chain hazard.
+
+Common hooks:
+
+| Hook            | Fires when                        | Typical use                                       |
+| --------------- | --------------------------------- | ------------------------------------------------- |
+| `pre-commit`    | Before a commit is created        | Run linters, formatters, fast tests               |
+| `commit-msg`    | After a commit message is entered | Enforce message format (e.g. Conventional Commits)|
+| `pre-push`      | Before a push is sent             | Run the full test suite                           |
+| `post-merge`    | After a merge into your branch    | Reinstall deps if `package.json` changed          |
+| `post-checkout` | After a checkout                  | Set up branch-specific env                        |
+
+Since hooks aren't shared via git itself, teams use frameworks that *are* committed and install hooks on setup:
+
+- **pre-commit** (https://pre-commit.com) — language-agnostic; config in `.pre-commit-config.yaml`. De facto standard for polyglot repos.
+- **husky** + **lint-staged** — JS/TS ecosystem. Husky installs hooks; lint-staged runs linters only on staged files.
+- **lefthook** — fast, single-binary, language-agnostic alternative.
+
+Bypass a hook in an emergency with `git commit --no-verify`. Use sparingly — hooks usually exist for a reason.
+
+---
+
+## 10. Signing commits
+
+A signed commit cryptographically asserts "this commit really came from me." Increasingly required by orgs — GitHub shows a "Verified" badge, and many teams have branch protection rules requiring signed commits on `main`.
+
+Two flavors.
+
+### GPG signing (classic)
+
+```
+gpg --gen-key                                              # generate a key
+git config --global user.signingkey <key-id>
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+```
+
+Upload the public key to GitHub (Settings → SSH and GPG keys) so it can verify.
+
+### SSH signing (newer, simpler)
+
+Available in Git ≥ 2.34. Reuses your existing SSH key — no extra GPG setup.
+
+```
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+
+# Tell Git which keys are "trusted" for verification:
+echo "aviv@example.com $(cat ~/.ssh/id_ed25519.pub)" >> ~/.config/git/allowed_signers
+git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
+```
+
+GitHub accepts SSH-signed commits too — upload the same key and mark it as a "Signing key" in addition to (or instead of) "Authentication key".
+
+Verify with `git log --show-signature`.
+
+---
+
+## 11. Worktrees: parallel branches without stashing
+
+A *worktree* is a second checked-out working directory backed by the same `.git` repo. Lets you have multiple branches checked out simultaneously without stashing your current work.
+
+```
+git worktree add ../proj-hotfix hotfix/urgent       # check out hotfix/urgent in ../proj-hotfix
+git worktree add -b new-feature ../proj-feat main   # create new-feature off main in ../proj-feat
+git worktree list                                   # see all worktrees
+git worktree remove ../proj-hotfix                  # done — clean up
+```
+
+Each worktree has its own working tree, index, and HEAD. The `.git` (objects, refs, config) is shared, so commits made in one are immediately visible in the others. Git refuses to check out the same branch in two worktrees at once.
+
+Killer use case: you're mid-feature, a P0 hotfix lands. Instead of stashing or committing WIP and switching branches, `git worktree add` a fresh dir on the hotfix branch, fix it there, push, then go back to your original dir untouched.
+
+---
+
+## 12. Workflows you'll meet in the wild
 
 ### Feature branch workflow
 
@@ -367,7 +573,7 @@ Long-lived `develop` branch, `release/*` branches, `hotfix/*` branches, etc. You
 
 ---
 
-## 8. When things go wrong — recovery cheatsheet
+## 13. When things go wrong — recovery cheatsheet
 
 | Symptom                                                  | Fix                                                       |
 | -------------------------------------------------------- | --------------------------------------------------------- |
@@ -384,7 +590,7 @@ Long-lived `develop` branch, `release/*` branches, `hotfix/*` branches, etc. You
 
 ---
 
-## 9. The `.git` directory, briefly
+## 14. The `.git` directory, briefly
 
 Worth poking around once. It's not magic, just files.
 
@@ -404,7 +610,7 @@ Run `cat .git/HEAD` and `cat .git/refs/heads/main` to see exactly what your bran
 
 ---
 
-## 10. Gotchas worth knowing
+## 15. Gotchas worth knowing
 
 - **`.gitignore` doesn't untrack already-tracked files.** Adding a file to `.gitignore` after it's been committed does nothing. You need `git rm --cached <file>`.
 - **Line endings on cross-platform repos.** `core.autocrlf` is the setting; on macOS/Linux usually `input`, on Windows usually `true`. Misconfigured = the entire file looks changed.
@@ -414,11 +620,10 @@ Run `cat .git/HEAD` and `cat .git/refs/heads/main` to see exactly what your bran
 
 ---
 
-## 11. What I want to explore next
+## 16. What I want to explore next
 
 (Add questions here as they come up.)
 
-- How does `git worktree` actually work — multiple working dirs sharing one `.git`?
 - When is `git rerere` worth turning on? (Resolves repeated merge conflicts the same way each time.)
 - The plumbing commands (`git cat-file`, `git rev-parse`, `git ls-tree`) and how to read raw objects.
 - `git filter-repo` for history rewriting.
